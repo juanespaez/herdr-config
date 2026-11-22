@@ -82,3 +82,10 @@ Claude Code need `ctrl-c/t/f/n`). Everything is `ctrl-shift` / `ctrl-alt` + lett
 ## Requirements
 
 Herdr with mod support (gpui-based app), macOS. `cockpit-subagents` needs `python3`.
+
+## License
+
+[MIT](LICENSE), covering my own files: the `cockpit-*` mods, `keyhelper`, the `cockpit` and
+`my-main` layouts, the `cockpit` theme, `keys.json` and `settings.json`. The shipped Herdr
+files included for completeness (other mods, layouts, `frame/`, `icons/`) belong to their
+respective authors and keep their own terms; see `icons/LICENSE-*.txt` and `icons/LICENSES.md`.
