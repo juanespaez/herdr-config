@@ -3,7 +3,8 @@ import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, v_resizab
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared, setShared } from "herdr";
 
 // Which sections are open, and where the divider sits: kept in shared state, so they survive restarts.
-import { loadGraph, graphKey } from "./repo.js";
+import { loadGraph, graphKey, commitFiles, commitDiffArgs } from "./repo.js";
+import { through } from "./graph.js";
 import { laneCell, laneWidth } from "./draw.js";
 
 const OPEN = "cockpit-changes.open", SPLIT = "cockpit-changes.split", SECTION = 34;
@@ -18,6 +19,12 @@ const key = () => JSON.stringify(location());
 // Reads write nothing under .git (no index refresh or lock, no fsmonitor cookie):
 // the folder watch would see it, and every refresh would start the next one.
 const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
+const ago = (time) => {
+  const s = Math.max(0, Date.now() / 1000 - time);
+  return s < 3600 ? `hace ${Math.max(1, Math.round(s / 60))} min` : s < 86400 ? `hace ${Math.round(s / 3600)} h` : `hace ${Math.round(s / 86400)} d`;
+};
+// Graph list keys: a commit's sha, or its details/file rows under it.
+const itemKey = (it) => (it.meta ? `${it.row.commit.sha}\0meta` : it.file ? `${it.row.commit.sha}\0file\0${it.file.path}` : it.row.commit.sha);
 const countLines = (text) => text ? text.split("\n").length - Number(text.endsWith("\n")) : 0;
 
 // Text draws a tab as nothing: pad each to the next 4-column stop.
@@ -41,6 +48,7 @@ export default class Changes extends View {
   init(_props, cx) {
     this.files = []; this.rows = []; this.diffWidth = 0; this.message = ""; this.handle = cx.focus_handle();
     this.graph = null; this.graphKey = null; this.graphScroll = VirtualListScrollHandle.new();
+    this.expanded = null; this.graphPick = null;
     this.input = InputState.new({ placeholder: "Commit message" });
     this.input.on("change", (_e, cx) => {
       const hadMessage = Boolean(this.message.trim());
@@ -73,7 +81,7 @@ export default class Changes extends View {
     if (context !== this.context) {
       this.context = context; this.root = null; this.files = []; this.open = null;
       this.setLines([]); this.message = ""; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.closed = false; this.limited = false;
-      this.graph = null; this.graphKey = null; this.graphError = null;
+      this.graph = null; this.graphKey = null; this.graphError = null; this.expanded = null; this.graphPick = null;
     }
     if (!cwd) return;
     this.loading = true;
@@ -112,7 +120,7 @@ export default class Changes extends View {
         await this.loadGraphFor(root, on, context);
         if (this.open && !files.some((f) => f.path === this.open)) { this.open = null; this.setLines([]); }
         // The first file's diff shows until you pick another.
-        if (!this.open && !this.closed && files.length) this.open = files[0].path;
+        if (!this.open && !this.closed && !this.graphPick && files.length) this.open = files[0].path;
         if (this.open) {
           try { await this.load(this.open, context); }
           catch { if (key() === context) this.setLines(["Cannot preview this diff (too large or unreadable)"]); }
@@ -149,7 +157,7 @@ export default class Changes extends View {
   }
 
   pick(path, cx) {
-    this.open = this.open === path ? null : path; this.setLines([]); this.note = null;
+    this.open = this.open === path ? null : path; this.setLines([]); this.note = null; this.graphPick = null;
     this.closed = !this.open;
     const context = this.context;
     if (this.open) cx.spawn(async (cx) => {
@@ -225,6 +233,7 @@ export default class Changes extends View {
       const graph = await loadGraph(git);
       if (key() !== context) return;
       this.graph = graph; this.graphKey = k; this.graphWidth = laneWidth(graph.rows); this.graphError = null;
+      if (this.expanded && !graph.rows.some((r) => r.commit.sha === this.expanded.sha)) this.expanded = null;
     } catch (e) { if (key() === context) this.graphError = String(e); }
   }
 
@@ -232,6 +241,74 @@ export default class Changes extends View {
     if (!this.root) return;
     const root = this.root, on = this.on, context = this.context;
     cx.spawn(async (cx) => { await this.loadGraphFor(root, on, context, force); cx.notify(); });
+  }
+
+  git() { const root = this.root, on = this.on; return (args) => exec("git", [...READ, ...args], { cwd: root, on }); }
+
+  // One commit open at a time: click it again to fold it.
+  pickCommit(row, cx) {
+    const sha = row.commit.sha, merge = row.commit.parents.length > 1, context = this.context;
+    if (this.expanded?.sha === sha) { this.expanded = null; cx.notify(); return; }
+    this.expanded = { sha, merge, files: null, copied: false };
+    cx.spawn(async (cx) => {
+      try {
+        const files = await commitFiles(this.git(), sha, merge);
+        if (key() === context && this.expanded?.sha === sha) this.expanded.files = files;
+      } catch (e) { if (key() === context && this.expanded?.sha === sha) { this.expanded.files = []; this.note = `Cannot list this commit's files: ${e}`; } }
+      cx.notify();
+    });
+    cx.notify();
+  }
+
+  // A file of a graph commit takes over the diff viewer (and unselects the Changes file).
+  pickCommitFile(sha, path, merge, cx) {
+    const context = this.context;
+    this.graphPick = { sha, path }; this.open = null; this.closed = true; this.note = null; this.setLines([]);
+    cx.spawn(async (cx) => {
+      try {
+        const r = await this.git()(commitDiffArgs(sha, path, merge));
+        if (r.code !== 0) throw new Error(r.stderr);
+        const all = r.stdout.replace(/\n$/, "").split("\n"), first = all.findIndex((l) => l.startsWith("@@"));
+        const lines = first < 0 ? ["No text diff available"] : all.slice(first);
+        if (key() === context && this.graphPick?.sha === sha && this.graphPick.path === path) this.setLines(lines.slice(0, 1500).map((line) => line.length > 4000 ? line.slice(0, 4000) + "… (line truncated)" : line));
+      } catch (e) { if (key() === context) this.note = `Cannot preview this diff (too large or unreadable): ${e}`; }
+      cx.notify();
+    });
+    cx.notify();
+  }
+
+  // The graph's rows, with the open commit's details and files under it.
+  graphItems() {
+    const rows = this.graph?.rows ?? [], ex = this.expanded;
+    return rows.flatMap((row) => row.commit.sha !== ex?.sha ? [{ row }]
+      : [{ row }, { row, meta: true }, ...(ex.files ?? []).map((file) => ({ row, file }))]);
+  }
+
+  // Rows of a virtual list can't hold click handlers: the list routes clicks by item key.
+  clickItem(k, cx) {
+    const [sha, kind, path] = k.split("\0"), row = this.graph?.rows.find((r) => r.commit.sha === sha), ex = this.expanded;
+    if (!row) return;
+    if (!kind) this.pickCommit(row, cx);
+    else if (kind === "meta" && ex) { cx.write_to_clipboard(sha); ex.copied = true; cx.notify(); }
+    else if (kind === "file" && ex) this.pickCommitFile(sha, path, ex.merge, cx);
+  }
+
+  subRow(item, t) {
+    const { row } = item, c = row.commit, ex = this.expanded, mono = settings().font_family ?? "JetBrains Mono";
+    const lines = laneCell({ top: [], bottom: through(row) }, null, false, 28, t, this.graphWidth);
+    if (item.meta) return h_flex().id(`graph-meta-${c.sha}`).w_full().h(28).flex_none().overflow_hidden().pr(10).gap(10).items_center().bg(t.raised).text_size(11).font_family(mono).text_color(t.dim)
+      .child(lines).child(div().flex_none().text_color(t.muted).child(c.sha.slice(0, 7)))
+      .child(div().flex_none().text_color(t.accent).cursor_pointer().child(ex.copied ? "✓ copiado" : "⧉ copiar"))
+      .child(div().min_w(0).truncate().child(`${c.author} · ${ago(c.time)}`));
+    const f = item.file, parts = f.path.split("/"), name = parts.pop();
+    const picked = this.graphPick?.sha === c.sha && this.graphPick.path === f.path;
+    return h_flex().id(`graph-file-${c.sha}-${f.path}`).w_full().h(28).flex_none().overflow_hidden().pr(10).gap(8).items_center().text_size(12).cursor_pointer()
+      .bg(picked ? t.selected : t.raised).hover((s) => s.bg(t.hover))
+      .child(lines)
+      .child(div().w(12).flex_none().text_size(11).text_color(f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : t.blocked).child(f.status))
+      .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(220).min_w(0).truncate().child(name)))
+      .when(f.add > 0, (e) => e.child(div().flex_none().text_size(11).text_color(t.ansi2).child(`+${f.add}`)))
+      .when(f.del > 0, (e) => e.child(div().flex_none().text_size(11).text_color(t.ansi1).child(`−${f.del}`)));
   }
 
   // Chips for a commit's refs: your branch, the base, others; ☁ when origin has it too.
@@ -260,7 +337,8 @@ export default class Changes extends View {
 
   graphRow(row, t) {
     const head = row.node === "head", c = row.commit;
-    return h_flex().id(`graph-${c.sha}`).w_full().h(28).flex_none().overflow_hidden().pr(10).items_center().cursor_pointer().hover((s) => s.bg(t.hover)).when(head, (e) => e.bg(t.selected))
+    const open = this.expanded?.sha === c.sha;
+    return h_flex().id(`graph-${c.sha}`).w_full().h(28).flex_none().overflow_hidden().pr(10).items_center().cursor_pointer().hover((s) => s.bg(t.hover)).when(head, (e) => e.bg(t.selected)).when(open && !head, (e) => e.bg(t.raised))
       .child(laneCell(row, { col: row.col, kind: row.node, color: row.color }, row.fork, 28, t, this.graphWidth))
       .child(h_flex().flex_1().min_w(0).gap(6).items_center()
         .child(div().min_w(0).truncate().when(head, (e) => e.font_semibold()).child(c.subject))
@@ -269,12 +347,13 @@ export default class Changes extends View {
   }
 
   graphBody(t) {
-    const rows = this.graph?.rows ?? [];
+    const rows = this.graphItems();
     const empty = this.error || this.graphError || (!this.graph ? (this.root ? "Loading graph…" : "No folder") : "No commits yet");
     return div().flex_1().min_h(0).relative()
       .when(rows.length > 0, (e) => e
-        .child(v_virtual_list("graph", rows.length, 28, (i) => rows[i].commit.sha,
-          (range) => rows.slice(range.start, range.end).map((row) => this.graphRow(row, t))).track_scroll(this.graphScroll).size_full())
+        .child(v_virtual_list("graph", rows.length, 28, (i) => itemKey(rows[i]),
+          (range) => rows.slice(range.start, range.end).map((it) => (it.meta || it.file ? this.subRow(it, t) : this.graphRow(it.row, t)))).track_scroll(this.graphScroll).size_full()
+          .on_item_click((k, cx) => this.clickItem(k, cx)))
         .child(Scrollbar.vertical("graph").absolute().inset_0()))
       .when(!rows.length, (e) => e.child(div().p(10).text_color(t.dim).child(empty)));
   }
@@ -284,17 +363,24 @@ export default class Changes extends View {
       .hover((s) => s.bg(t.raised).text_color(t.foreground)).on_click((_e, cx) => { cx.stop_propagation(); run(cx); }).child(label);
     return [div().flex_1(),
       ...(g && g.ahead !== null ? [div().flex_none().text_size(11).font_family("JetBrains Mono").text_color(t.muted).child(`↑${g.ahead} ↓${g.behind}`)] : []),
-      button("graph-head", "◎", () => { const i = g?.rows.findIndex((r) => r.node === "head") ?? -1; if (i >= 0) this.graphScroll.scroll_to_item(i, "center"); }),
+      button("graph-head", "◎", () => { const i = this.graphItems().findIndex((it) => !it.meta && !it.file && it.row.node === "head"); if (i >= 0) this.graphScroll.scroll_to_item(i, "center"); }),
       button("graph-refresh", "⟳", (cx) => this.refreshGraph(cx, true))];
   }
 
   diffArea(t) {
+    const g = this.graphPick, area = this.diffBody(t);
+    return g ? v_flex().flex_1().min_h(0).size_full()
+      .child(div().flex_none().px(12).py(5).border_b(1).border_color(t.border).text_size(11).text_color(t.dim).truncate().child(`${g.sha.slice(0, 7)} · ${g.path}`))
+      .child(area) : area;
+  }
+
+  diffBody(t) {
     return div().flex_1().min_h(0).size_full().relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
       .child(div().id("changes-diff-x").size_full().overflow_x_scrollbar()
         .child(div().w_full().min_w(this.diffWidth).h_full().child(v_virtual_list("changes-diff", this.rows.length, 20, (i) => String(i),
           (range) => this.rows.slice(range.start, range.end).map((row) => this.diffRow(row, t))).size_full())))
       .child(Scrollbar.vertical("changes-diff").viewport_from_layout().absolute().inset_0())
-      .when(!this.open && this.files.length > 0, (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child("Select a file to view its changes")));
+      .when(!this.open && !this.graphPick && this.files.length > 0, (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child("Select a file to view its changes")));
   }
 
   render(cx) {
