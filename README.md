@@ -3,6 +3,8 @@
 My [Herdr](https://herdr.dev) setup: a **cockpit** layout, a warm dark theme, a handful of
 mods, and a letter-only keymap (no arrow keys needed).
 
+![The cockpit layout: agents panel on the left, Claude Code tabs and terminal on the right](docs/cockpit.png)
+
 ## What's inside
 
 This repo mirrors `~/.config/herdr-app`, so installing is just copying it into place.
