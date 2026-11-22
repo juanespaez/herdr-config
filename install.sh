@@ -1,26 +1,37 @@
 #!/usr/bin/env bash
-# Installs this Herdr config into ~/.config/herdr-app (backs up what it replaces).
+# Installs this Herdr setup into ~/.config/herdr-app.
+# Anything it would overwrite is first copied to <dest>/.backup-<timestamp>/.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST="${HERDR_CONFIG_DIR:-$HOME/.config/herdr-app}"
 BACKUP="$DEST/.backup-$(date +%Y%m%d-%H%M%S)"
 
-mkdir -p "$DEST/mods" "$DEST/layouts" "$DEST/themes" "$BACKUP"
+mkdir -p "$DEST" "$BACKUP"
 
-backup() { [ -e "$DEST/$1" ] && mkdir -p "$BACKUP/$(dirname "$1")" && cp -R "$DEST/$1" "$BACKUP/$1" || true; }
-
-for f in keys.json settings.json layouts/cockpit.json layouts/my-main.json themes/cockpit.json; do
-  backup "$f"
+# Everything in the repo except repo-only files.
+for item in "$SRC"/* "$SRC"/.[!.]*; do
+  name="$(basename "$item")"
+  case "$name" in install.sh|README.md|.git|.gitignore|.DS_Store|keys.json) continue ;; esac
+  [ -e "$item" ] || continue
+  if [ -d "$item" ]; then
+    # Back up only the files that already exist and would be replaced.
+    (cd "$item" && find . -type f) | while read -r f; do
+      [ -e "$DEST/$name/$f" ] && mkdir -p "$BACKUP/$name/$(dirname "$f")" && cp "$DEST/$name/$f" "$BACKUP/$name/$f" || true
+    done
+    mkdir -p "$DEST/$name"
+    cp -R "$item"/. "$DEST/$name/"
+  else
+    [ -e "$DEST/$name" ] && cp "$DEST/$name" "$BACKUP/$name" || true
+    cp "$item" "$DEST/$name"
+  fi
 done
-for m in "$SRC"/mods/*/; do backup "mods/$(basename "$m")"; done
 
-cp -R "$SRC"/mods/. "$DEST/mods/"
-cp "$SRC"/layouts/*.json "$DEST/layouts/"
-cp "$SRC"/themes/*.json "$DEST/themes/"
-cp "$SRC/settings.json" "$DEST/settings.json"
 # keys.json uses __HOME__ because Herdr runs argv without a shell ($HOME would not expand).
+[ -e "$DEST/keys.json" ] && cp "$DEST/keys.json" "$BACKUP/keys.json" || true
 sed "s#__HOME__#$HOME#g" "$SRC/keys.json" > "$DEST/keys.json"
 
-echo "Installed into $DEST (previous files backed up to $BACKUP)."
-echo "Restart Herdr, then pick the 'cockpit' layout (cmd-shift-l)."
+rmdir "$BACKUP" 2>/dev/null || true
+echo "Installed into $DEST"
+[ -d "$BACKUP" ] && echo "Previous files backed up to $BACKUP"
+echo "Restart Herdr. The cockpit layout is already selected (switch with cmd-shift-l)."
