@@ -1,8 +1,11 @@
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, v_resizable, resizable_panel } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, v_resizable, resizable_panel, VirtualListScrollHandle } from "gpui-base";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared, setShared } from "herdr";
 
 // Which sections are open, and where the divider sits: kept in shared state, so they survive restarts.
+import { loadGraph, graphKey } from "./repo.js";
+import { laneCell, laneWidth } from "./draw.js";
+
 const OPEN = "cockpit-changes.open", SPLIT = "cockpit-changes.split", SECTION = 34;
 
 function location() {
@@ -37,6 +40,7 @@ function diffRows(lines) {
 export default class Changes extends View {
   init(_props, cx) {
     this.files = []; this.rows = []; this.diffWidth = 0; this.message = ""; this.handle = cx.focus_handle();
+    this.graph = null; this.graphKey = null; this.graphScroll = VirtualListScrollHandle.new();
     this.input = InputState.new({ placeholder: "Commit message" });
     this.input.on("change", (_e, cx) => {
       const hadMessage = Boolean(this.message.trim());
@@ -69,6 +73,7 @@ export default class Changes extends View {
     if (context !== this.context) {
       this.context = context; this.root = null; this.files = []; this.open = null;
       this.setLines([]); this.message = ""; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.closed = false; this.limited = false;
+      this.graph = null; this.graphKey = null; this.graphError = null;
     }
     if (!cwd) return;
     this.loading = true;
@@ -104,6 +109,7 @@ export default class Changes extends View {
         if (key() !== context) return;
         this.root = root; this.on = on; this.hasHead = head.code === 0; this.files = files; this.limited = entries.length > 1000; this.error = null;
         this.watch(root, cx);
+        await this.loadGraphFor(root, on, context);
         if (this.open && !files.some((f) => f.path === this.open)) { this.open = null; this.setLines([]); }
         // The first file's diff shows until you pick another.
         if (!this.open && !this.closed && files.length) this.open = files[0].path;
@@ -182,6 +188,7 @@ export default class Changes extends View {
 
   toggle(id, cx) {
     setShared(OPEN, { changes: this.isOpen("changes"), graph: this.isOpen("graph"), [id]: !this.isOpen(id) });
+    if (id === "graph" && this.isOpen("graph")) this.refreshGraph(cx, true);
     cx.notify();
   }
 
@@ -208,8 +215,77 @@ export default class Changes extends View {
       .child(Scrollbar.vertical("changes-list").absolute().inset_0());
   }
 
+  // Reloads the graph only when HEAD, its upstream or the base moved (or when asked to).
+  async loadGraphFor(root, on, context, force = false) {
+    if (!this.isOpen("graph")) return;
+    const git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
+    try {
+      const k = await graphKey(git);
+      if (key() !== context || (!force && k === this.graphKey && this.graph)) return;
+      const graph = await loadGraph(git);
+      if (key() !== context) return;
+      this.graph = graph; this.graphKey = k; this.graphWidth = laneWidth(graph.rows); this.graphError = null;
+    } catch (e) { if (key() === context) this.graphError = String(e); }
+  }
+
+  refreshGraph(cx, force) {
+    if (!this.root) return;
+    const root = this.root, on = this.on, context = this.context;
+    cx.spawn(async (cx) => { await this.loadGraphFor(root, on, context, force); cx.notify(); });
+  }
+
+  // Chips for a commit's refs: your branch, the base, others; ☁ when origin has it too.
+  chips(row, t) {
+    const g = this.graph, refs = row.commit.refs.filter((r) => r !== "origin/HEAD");
+    const baseLocal = g.base?.replace(/^origin\//, "");
+    const chip = (label, style) => div().flex_none().max_w(130).truncate().ml(6).px(7).py(1).rounded(10).text_size(11).child(label)
+      .when(style === "mine", (e) => e.bg(t.accent).text_color(t.accent_foreground))
+      .when(style === "base", (e) => e.border_1().border_color(t.ansi4).text_color(t.ansi4))
+      .when(style === "other", (e) => e.border_1().border_color(t.border).text_color(t.muted));
+    const out = [];
+    for (const ref of refs) {
+      if (ref.startsWith("tag: ")) { out.push(chip(ref.slice(5), "other")); continue; }
+      const remote = ref.startsWith("origin/"), name = remote ? ref.slice(7) : ref;
+      if (remote && refs.includes(name)) continue;
+      // Your branch's upstream is just a cloud, as in VS Code.
+      if (remote && name === g.branchName) { out.push(chip("☁", "other")); continue; }
+      const cloud = remote || refs.includes(`origin/${name}`) ? " ☁" : "";
+      const style = !remote && name === g.branchName ? "mine" : name === baseLocal ? "base" : "other";
+      out.push(chip(`${style === "mine" ? "◎ " : ""}${remote && style !== "base" ? ref : name}${cloud}`, style));
+    }
+    if (row.fork) out.push(div().flex_none().ml(6).px(5).py(1).rounded(4).border_1().border_dashed().border_color(t.accent).text_size(10.5).text_color(t.accent)
+      .child(`↳ ${g.branchName ?? "HEAD"} nació aquí`));
+    return out.slice(0, 4);
+  }
+
+  graphRow(row, t) {
+    const head = row.node === "head", c = row.commit;
+    return h_flex().id(`graph-${c.sha}`).w_full().h(28).flex_none().overflow_hidden().pr(10).items_center().cursor_pointer().hover((s) => s.bg(t.hover)).when(head, (e) => e.bg(t.selected))
+      .child(laneCell(row, { col: row.col, kind: row.node, color: row.color }, row.fork, 28, t, this.graphWidth))
+      .child(h_flex().flex_1().min_w(0).gap(6).items_center()
+        .child(div().min_w(0).truncate().when(head, (e) => e.font_semibold()).child(c.subject))
+        .when(!head, (e) => e.child(div().flex_none().text_size(11.5).text_color(t.dim).child(c.author))))
+      .children(this.chips(row, t));
+  }
+
   graphBody(t) {
-    return div().flex_1().min_h(0).p(10).text_color(t.dim).child("Graph");
+    const rows = this.graph?.rows ?? [];
+    const empty = this.error || this.graphError || (!this.graph ? (this.root ? "Loading graph…" : "No folder") : "No commits yet");
+    return div().flex_1().min_h(0).relative()
+      .when(rows.length > 0, (e) => e
+        .child(v_virtual_list("graph", rows.length, 28, (i) => rows[i].commit.sha,
+          (range) => rows.slice(range.start, range.end).map((row) => this.graphRow(row, t))).track_scroll(this.graphScroll).size_full())
+        .child(Scrollbar.vertical("graph").absolute().inset_0()))
+      .when(!rows.length, (e) => e.child(div().p(10).text_color(t.dim).child(empty)));
+  }
+
+  graphTools(t) {
+    const g = this.graph, button = (id, label, run) => div().id(id).flex_none().px(5).py(2).rounded(5).text_size(12).text_color(t.dim).cursor_pointer()
+      .hover((s) => s.bg(t.raised).text_color(t.foreground)).on_click((_e, cx) => { cx.stop_propagation(); run(cx); }).child(label);
+    return [div().flex_1(),
+      ...(g && g.ahead !== null ? [div().flex_none().text_size(11).font_family("JetBrains Mono").text_color(t.muted).child(`↑${g.ahead} ↓${g.behind}`)] : []),
+      button("graph-head", "◎", () => { const i = g?.rows.findIndex((r) => r.node === "head") ?? -1; if (i >= 0) this.graphScroll.scroll_to_item(i, "center"); }),
+      button("graph-refresh", "⟳", (cx) => this.refreshGraph(cx, true))];
   }
 
   diffArea(t) {
@@ -229,7 +305,7 @@ export default class Changes extends View {
     const changesHeader = this.section("changes", "Changes", t, [
       div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted).child(`${this.files.length} files`),
       div().flex_1(), div().text_size(11).text_color(t.ansi2).child(`+${add}`), div().text_size(11).text_color(t.ansi1).child(`−${del}`)]);
-    const graphHeader = this.section("graph", "Graph", t, [div().flex_1()]);
+    const graphHeader = this.section("graph", "Graph", t, this.graphTools(t));
     const limited = (el) => el.when(this.limited, (e) => e.child(div().px(12).py(4).text_size(11).text_color(t.dim).child("Showing the first 1,000 changed files")));
 
     // With the Graph open, a divider you drag splits the sections from the diff; otherwise the

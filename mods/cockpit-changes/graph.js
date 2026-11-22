@@ -27,8 +27,11 @@ const MAX_COL = 7;
 // and lane 0 curves into it.
 export function layoutGraph(commits, { head, branch, base, fork }) {
   const active = head ? [{ sha: head, color: "branch", above: false }] : [];
+  // Base's own history (its first-parent chain) is base-colored wherever a lane for it opens.
+  const bySha = new Map(commits.map((c) => [c.sha, c])), baseChain = new Set();
+  for (let sha = base; sha && !baseChain.has(sha); sha = bySha.get(sha)?.parents[0]) baseChain.add(sha);
   let rotation = 0;
-  const colorFor = (sha) => (sha === head ? "branch" : sha === base ? "base" : rotation++);
+  const colorFor = (sha) => (sha === head || branch.has(sha) ? "branch" : baseChain.has(sha) ? "base" : rotation++);
   const free = () => { const i = active.findIndex((a) => !a); return i < 0 ? active.length : i; };
 
   const rows = commits.map((commit) => {

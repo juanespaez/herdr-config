@@ -108,3 +108,11 @@ test("through gives the straight lines that continue under a row", () => {
   assert.equal(t[0].from, 0);
   assert.equal(t[0].to, 0);
 });
+
+test("a lane opened by merging base's history is colored as base", () => {
+  const rows = layoutGraph(
+    [C("c3", "c2", "m2"), C("m3", "m2"), C("m2", "m1"), C("c2", "m1"), C("m1")],
+    { head: "c3", branch: new Set(["c3", "c2"]), base: "m3", fork: "m1" });
+  assert.equal(rows.find((r) => r.commit.sha === "m2").color, "base");
+  assert.equal(rows.find((r) => r.commit.sha === "m3").color, "base");
+});
