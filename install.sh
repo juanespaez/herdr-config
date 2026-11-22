@@ -12,7 +12,7 @@ mkdir -p "$DEST" "$BACKUP"
 # Everything in the repo except repo-only files.
 for item in "$SRC"/* "$SRC"/.[!.]*; do
   name="$(basename "$item")"
-  case "$name" in install.sh|README.md|.git|.gitignore|.DS_Store|keys.json) continue ;; esac
+  case "$name" in install.sh|README.md|LICENSE|docs|.git|.gitignore|.DS_Store|keys.json) continue ;; esac
   [ -e "$item" ] || continue
   if [ -d "$item" ]; then
     # Back up only the files that already exist and would be replaced.
