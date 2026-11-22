@@ -1,6 +1,9 @@
-import { View, div } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings } from "herdr";
+import { View, div, svg } from "gpui-kit";
+import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, v_resizable, resizable_panel } from "gpui-base";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared, setShared } from "herdr";
+
+// Which sections are open, and where the divider sits: kept in shared state, so they survive restarts.
+const OPEN = "cockpit-changes.open", SPLIT = "cockpit-changes.split", SECTION = 34;
 
 function location() {
   const space = spaces().find((s) => s.active), f = focused();
@@ -175,35 +178,79 @@ export default class Changes extends View {
       .child(div().flex_1().min_w(0).truncate().child(text));
   }
 
-  render(cx) {
-    if (key() !== this.context) this.refresh(cx);
-    const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
-    const enabled = Boolean(this.message.trim() && this.root && !this.busy && !this.loading);
-    return v_flex().id("changes").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
-      .on_key_down((e, cx) => {
-        if (e.key === "escape" && this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); }
-      })
-      .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(div().font_semibold().child("Changes"))
-        .child(div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted).child(`${this.files.length} files`))
-        .child(div().flex_1()).child(div().text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().text_size(11).text_color(t.ansi1).child(`−${del}`)))
-      // overflow_y_scrollbar() wraps the list, so its flex sizing never reached the panel's layout.
-      .child(div().flex_1().min_h(44).max_h(this.files.length * 28 + 12).relative().border_b(1).border_color(t.border)
-        .child(v_flex().id("changes-list").absolute().inset_0().overflow_y_scroll().p(6).children(this.files.map((f) => {
+  isOpen(id) { return (shared(OPEN) ?? {})[id] ?? true; }
+
+  toggle(id, cx) {
+    setShared(OPEN, { changes: this.isOpen("changes"), graph: this.isOpen("graph"), [id]: !this.isOpen(id) });
+    cx.notify();
+  }
+
+  // A section header: chevron, title and whatever the section adds on the right.
+  section(id, title, t, extras = []) {
+    const open = this.isOpen(id);
+    return h_flex().id(`section-${id}`).h(SECTION).flex_none().px(10).gap(8).items_center().border_b(1).border_color(t.border).cursor_pointer().hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => this.toggle(id, cx))
+      .child(svg(`mods/cockpit-changes/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim))
+      .child(div().font_semibold().child(title))
+      .children(extras);
+  }
+
+  changesList(t, cap) {
+    // overflow_y_scrollbar() wraps the list, so its flex sizing never reached the panel's layout.
+    return div().flex_1().min_h(44).max_h(Math.min(this.files.length * 28 + 12, cap)).relative().border_b(1).border_color(t.border)
+      .child(v_flex().id("changes-list").absolute().inset_0().overflow_y_scroll().p(6).children(this.files.map((f) => {
         const parts = f.path.split("/"), name = parts.pop();
         return h_flex().id(`change-${f.path}`).h(28).flex_none().px(8).gap(8).items_center().rounded(7).cursor_pointer().when(this.open === f.path, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.pick(f.path, cx))
           .child(div().w(14).text_size(11).text_color(f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : f.status === "U" ? t.ansi1 : t.blocked).child(f.status))
           .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(260).min_w(0).truncate().child(name)))
           .when(f.add > 0, (e) => e.child(div().text_size(11).text_color(t.ansi2).child(`+${f.add}`))).when(f.del > 0, (e) => e.child(div().text_size(11).text_color(t.ansi1).child(`−${f.del}`)));
       })).when(!this.files.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading changes…" : this.root ? "No uncommitted changes" : "No folder")))))
-        .child(Scrollbar.vertical("changes-list").absolute().inset_0()))
-      .when(this.limited, el => el.child(div().px(12).py(4).text_size(11).text_color(t.dim).child("Showing the first 1,000 changed files")))
-      .child(div().flex_1().min_h(0).relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
-        .child(div().id("changes-diff-x").size_full().overflow_x_scrollbar()
-          .child(div().w_full().min_w(this.diffWidth).h_full().child(v_virtual_list("changes-diff", this.rows.length, 20, (i) => String(i),
-            (range) => this.rows.slice(range.start, range.end).map((row) => this.diffRow(row, t))).size_full())))
-        .child(Scrollbar.vertical("changes-diff").viewport_from_layout().absolute().inset_0())
-        .when(!this.open && this.files.length > 0, (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child("Select a file to view its changes"))))
+      .child(Scrollbar.vertical("changes-list").absolute().inset_0());
+  }
+
+  graphBody(t) {
+    return div().flex_1().min_h(0).p(10).text_color(t.dim).child("Graph");
+  }
+
+  diffArea(t) {
+    return div().flex_1().min_h(0).size_full().relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
+      .child(div().id("changes-diff-x").size_full().overflow_x_scrollbar()
+        .child(div().w_full().min_w(this.diffWidth).h_full().child(v_virtual_list("changes-diff", this.rows.length, 20, (i) => String(i),
+          (range) => this.rows.slice(range.start, range.end).map((row) => this.diffRow(row, t))).size_full())))
+      .child(Scrollbar.vertical("changes-diff").viewport_from_layout().absolute().inset_0())
+      .when(!this.open && this.files.length > 0, (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child("Select a file to view its changes")));
+  }
+
+  render(cx) {
+    if (key() !== this.context) this.refresh(cx);
+    const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
+    const enabled = Boolean(this.message.trim() && this.root && !this.busy && !this.loading);
+    const changesOpen = this.isOpen("changes"), graphOpen = this.isOpen("graph");
+    const changesHeader = this.section("changes", "Changes", t, [
+      div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted).child(`${this.files.length} files`),
+      div().flex_1(), div().text_size(11).text_color(t.ansi2).child(`+${add}`), div().text_size(11).text_color(t.ansi1).child(`−${del}`)]);
+    const graphHeader = this.section("graph", "Graph", t, [div().flex_1()]);
+    const limited = (el) => el.when(this.limited, (e) => e.child(div().px(12).py(4).text_size(11).text_color(t.dim).child("Showing the first 1,000 changed files")));
+
+    // With the Graph open, a divider you drag splits the sections from the diff; otherwise the
+    // sections take what they need and the diff the rest, as before.
+    const body = graphOpen
+      ? v_resizable("cockpit-changes-split").flex_1().min_h(0).w_full()
+          .on_resize((sizes) => setShared(SPLIT, sizes[0]))
+          .child(resizable_panel().size(shared(SPLIT) ?? 320).size_range(SECTION * 2, 4000)
+            .child(v_flex().size_full().min_h(0)
+              .child(changesHeader).when(changesOpen, (e) => limited(e.child(this.changesList(t, 220))))
+              .child(graphHeader).child(this.graphBody(t))))
+          .child(resizable_panel().size_range(60, 4000).child(this.diffArea(t)))
+      : v_flex().flex_1().min_h(0)
+          .child(changesHeader).when(changesOpen, (e) => limited(e.child(this.changesList(t, 4000))))
+          .child(graphHeader).child(this.diffArea(t));
+
+    return v_flex().id("changes").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
+      .on_key_down((e, cx) => {
+        if (e.key === "escape" && this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); }
+      })
+      .child(body)
       .when(Boolean(this.note), (e) => e.child(div().px(10).pb(8).text_size(11).text_color(t.ansi1).child(this.note)))
       .child(h_flex().flex_none().p(10).gap(8).border_t(1).border_color(t.border)
         .child(div().id("commit-message").flex_1().min_w(0).h(32).px(10).flex().items_center().rounded(8).border_1().border_color(this.typing ? t.accent : t.border).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation()).child(Input.new(this.input).h_full().text_size(12).text_color(t.foreground)))
