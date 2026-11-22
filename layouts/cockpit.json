@@ -1,0 +1,211 @@
+{
+  "id": "root",
+  "cloned_from": {
+    "name": "my-main",
+    "version": "0.1.15"
+  },
+  "type": "column",
+  "background": "canvas",
+  "theme": "cockpit",
+  "padding": [
+    12,
+    14
+  ],
+  "gap": 10,
+  "terminal_padding": [
+    14,
+    12
+  ],
+  "titlebar": "none",
+  "traffic_lights": [
+    18,
+    22
+  ],
+  "floating": [
+    {
+      "id": "keyhelper",
+      "content": {
+        "mod": "keyhelper"
+      },
+      "edge": "bottom",
+      "align": "end"
+    }
+  ],
+  "children": [
+    {
+      "id": "top",
+      "type": "block",
+      "content": {
+        "mod": "cockpit-top"
+      },
+      "size": {
+        "px": 40
+      },
+      "window_drag": true
+    },
+    {
+      "id": "body",
+      "type": "row",
+      "gap": 12,
+      "resizable": false,
+      "children": [
+        {
+          "id": "keys",
+          "type": "block",
+          "content": {
+            "mod": "cockpit-keys"
+          },
+          "size": {
+            "px": 250
+          },
+          "background": "surface",
+          "border": {
+            "width": 1,
+            "color": "border"
+          },
+          "radius": 16,
+          "hidden": true
+        },
+        {
+          "id": "agents",
+          "type": "block",
+          "content": {
+            "mod": "cockpit-agents"
+          },
+          "size": {
+            "px": 340
+          },
+          "background": "surface",
+          "border": {
+            "width": 1,
+            "color": "border"
+          },
+          "radius": 16
+        },
+        {
+          "id": "work",
+          "type": "column",
+          "children": [
+            {
+              "id": "tabs",
+              "type": "block",
+              "content": {
+                "mod": "cockpit-tabs"
+              },
+              "size": {
+                "px": 40
+              },
+              "window_drag": true
+            },
+            {
+              "id": "work-body",
+              "type": "row",
+              "children": [
+                {
+                  "id": "main",
+                  "type": "block",
+                  "content": {
+                    "tab": "active",
+                    "pane": {
+                      "header": {
+                        "content": {
+                          "mod": "pane"
+                        },
+                        "reveal": "always",
+                        "height": 30,
+                        "position": "top"
+                      },
+                      "background": "surface",
+                      "border": {
+                        "width": 1,
+                        "color": "border"
+                      },
+                      "focus": {
+                        "width": 1,
+                        "color": "accent"
+                      },
+                      "radius": 16,
+                      "gap": 10,
+                      "lone": true
+                    }
+                  }
+                },
+                {
+                  "id": "panel",
+                  "type": "column",
+                  "children": [
+                    {
+                      "id": "panel-body",
+                      "type": "stack",
+                      "children": [
+                        {
+                          "id": "files",
+                          "type": "block",
+                          "content": {
+                            "mod": "files"
+                          }
+                        },
+                        {
+                          "id": "changes",
+                          "type": "block",
+                          "content": {
+                            "mod": "changes"
+                          }
+                        }
+                      ],
+                      "active": "files",
+                      "background": "surface",
+                      "border": {
+                        "width": 1,
+                        "color": "border"
+                      },
+                      "radius": 16
+                    }
+                  ],
+                  "size": {
+                    "px": 340
+                  },
+                  "min": 280,
+                  "max": 900,
+                  "hidden": true,
+                  "gap": 10
+                }
+              ],
+              "padding": 0,
+              "gap": 10
+            }
+          ],
+          "resizable": false,
+          "gap": 8
+        },
+        {
+          "id": "subagents",
+          "type": "block",
+          "content": {
+            "mod": "cockpit-subagents"
+          },
+          "size": {
+            "px": 340
+          },
+          "background": "surface",
+          "border": {
+            "width": 1,
+            "color": "border"
+          },
+          "radius": 16,
+          "hidden": true
+        }
+      ]
+    },
+    {
+      "id": "status",
+      "type": "block",
+      "content": {
+        "mod": "cockpit-status"
+      },
+      "size": {
+        "px": 24
+      }
+    }
+  ]
+}
