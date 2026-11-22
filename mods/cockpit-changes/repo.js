@@ -1,6 +1,6 @@
 // What the Graph reads from git. `git(args)` runs git in the repo (already read-only: the caller
 // adds READ), so node can test this against real repos.
-import { LOG_FORMAT, parseLog, findForkPoint, layoutGraph } from "./graph.js";
+import { LOG_FORMAT, parseLog, layoutGraph } from "./graph.js";
 
 const LIMIT = 300;
 const out = async (git, args) => { const r = await git(args); return r.code === 0 ? r.stdout.trim() : null; };
@@ -39,20 +39,26 @@ export async function loadGraph(git) {
 
   // The local base rides along in base's lane when base is origin's.
   const localBase = base?.startsWith("origin/") && await exists(git, base.slice(7)) ? base.slice(7) : null;
-  const refs = [...new Set(["HEAD", upstream, base, localBase].filter(Boolean))];
-  const log = await git(["log", "--topo-order", `-n${LIMIT}`, `--format=${LOG_FORMAT}`, ...refs, "--"]);
-  if (log.code !== 0) throw new Error(log.stderr.trim());
-  const commits = parseLog(log.stdout);
+  const onBase = Boolean(base) && (branchName === base || `origin/${branchName}` === base);
+  const tips = [...new Set(["HEAD", upstream].filter(Boolean))], bases = [base, localBase].filter(Boolean);
 
-  const firstParents = ((await out(git, ["rev-list", "--first-parent", `-n${LIMIT}`, "HEAD"])) ?? "").split("\n").filter(Boolean);
+  // Your side first (everything base doesn't have), then base's: a busy base can't push HEAD out,
+  // and the order stays children-before-parents.
+  const log = async (refs, n) => {
+    if (n <= 0) return [];
+    const r = await git(["log", "--topo-order", `-n${n}`, `--format=${LOG_FORMAT}`, ...refs, "--"]);
+    if (r.code !== 0) throw new Error(r.stderr.trim());
+    return parseLog(r.stdout);
+  };
+  const mine = await log(onBase || !base ? [...tips, ...bases] : [...tips, "--not", ...bases], LIMIT);
+  const seen = new Set(mine.map((c) => c.sha));
+  const commits = onBase || !base ? mine : [...mine, ...(await log(bases, LIMIT - mine.length)).filter((c) => !seen.has(c.sha))];
+
+  // Born: the first parent of the oldest commit on HEAD's first-parent chain that base lacks.
+  const own = base && !onBase ? ((await out(git, ["rev-list", "--first-parent", "HEAD", "--not", base])) ?? "").split("\n").filter(Boolean) : [];
+  const fork = own.length ? await out(git, ["rev-parse", "--verify", "--quiet", `${own[own.length - 1]}^`]) : null;
+  const branch = new Set(own.length ? own : ((await out(git, ["rev-list", "--first-parent", `-n${LIMIT}`, "HEAD"])) ?? "").split("\n").filter(Boolean));
   const baseSha = base ? await out(git, ["rev-parse", "--verify", "--quiet", base]) : null;
-  let fork = null, branch = new Set(firstParents);
-  if (base) {
-    const inBase = new Set(((await out(git, ["rev-list", `-n${LIMIT}`, base])) ?? "").split("\n").filter(Boolean));
-    const born = findForkPoint(firstParents, inBase);
-    // HEAD already in base: you're on it (or haven't committed yet), nothing was born.
-    if (born && born !== head) { fork = born; branch = new Set(firstParents.slice(0, firstParents.indexOf(born))); }
-  }
 
   const rows = layoutGraph(commits, { head, branch, base: baseSha, fork });
   return { rows, branchName, upstream, base, ahead, behind, key: await graphKey(git) };

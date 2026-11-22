@@ -57,7 +57,8 @@ export function layoutGraph(commits, { head, branch, base, fork }) {
     const elsewhere = (p) => active.findIndex((a, i) => a?.sha === p && i !== col);
     parents.forEach((p, n) => {
       const there = elsewhere(p);
-      if (n === 0 && (there < 0 || branch.has(p))) {
+      // Lane 0 waiting for a commit off the branch is the branch ending: base keeps it, lane 0 curves in.
+      if (n === 0 && (there < 0 || branch.has(p) || (there === 0 && col !== 0))) {
         active[col] = { sha: p, color, above: true };
         bottom.push({ from: col, to: col, color });
       } else if (there >= 0) {

@@ -132,3 +132,27 @@ test("loadGraph and graphKey only read", async () => {
   const WRITES = ["fetch", "pull", "push", "commit", "add", "update-index", "gc", "checkout", "switch", "merge", "reset"];
   assert.deepEqual(calls.filter((c) => WRITES.includes(c)), []);
 });
+
+test("on main ahead of origin/main nothing is marked born", async () => {
+  const repo = makeRepo("main");
+  commit(repo, "one");
+  makeRemote(repo);
+  commit(repo, "two");
+  const g = await loadGraph(repo.git);
+  assert.equal(g.ahead, 1);
+  assert.ok(g.rows.every((r) => !r.fork));
+  assert.ok(g.rows.every((r) => r.col === 0));
+});
+
+test("a branch older than 300 base commits still shows HEAD", async () => {
+  const repo = makeRepo("main");
+  const born = commit(repo, "base0");
+  repo.sh("git switch -q -c feat");
+  const mine = commit(repo, "mine");
+  repo.sh("git switch -q main && for i in $(seq 1 320); do git commit -q --allow-empty -m m$i; done && git switch -q feat");
+  const g = await loadGraph(repo.git);
+  assert.equal(g.rows.find((r) => r.node === "head")?.commit.sha, mine);
+  // born is 320 commits below base's tip: past the limit, so (per the spec) it isn't marked, and nothing else is.
+  assert.ok(!g.rows.some((r) => r.commit.sha === born));
+  assert.ok(g.rows.every((r) => !r.fork));
+});

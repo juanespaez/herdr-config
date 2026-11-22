@@ -116,3 +116,13 @@ test("a lane opened by merging base's history is colored as base", () => {
   assert.equal(rows.find((r) => r.commit.sha === "m2").color, "base");
   assert.equal(rows.find((r) => r.commit.sha === "m3").color, "base");
 });
+
+test("the commit a branch was born from stays in base's lane when base merges it later", () => {
+  const rows = layoutGraph(
+    [C("c5", "c4"), C("c4", "F"), C("m40", "F", "x"), C("x", "F"), C("F", "o"), C("o")],
+    { head: "c5", branch: new Set(["c5", "c4"]), base: "m40", fork: "F" });
+  const F = rows.find((r) => r.commit.sha === "F"), o = rows.find((r) => r.commit.sha === "o");
+  assert.notEqual(F.col, 0);
+  assert.equal(F.color, "base");
+  assert.equal(o.col, F.col);
+});

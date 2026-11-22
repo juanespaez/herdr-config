@@ -1,13 +1,13 @@
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, v_resizable, resizable_panel, VirtualListScrollHandle } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared, setShared } from "herdr";
 
-// Which sections are open, and where the divider sits: kept in shared state, so they survive restarts.
 import { loadGraph, graphKey, commitFiles, commitDiffArgs } from "./repo.js";
 import { through } from "./graph.js";
 import { laneCell, laneWidth } from "./draw.js";
 
-const OPEN = "cockpit-changes.open", SPLIT = "cockpit-changes.split", SECTION = 34;
+// Which sections are open: kept in shared state, so it survives restarts.
+const OPEN = "cockpit-changes.open", SECTION = 34;
 
 function location() {
   const space = spaces().find((s) => s.active), f = focused();
@@ -119,8 +119,6 @@ export default class Changes extends View {
         this.watch(root, cx);
         await this.loadGraphFor(root, on, context);
         if (this.open && !files.some((f) => f.path === this.open)) { this.open = null; this.setLines([]); }
-        // The first file's diff shows until you pick another.
-        if (!this.open && !this.closed && !this.graphPick && files.length) this.open = files[0].path;
         if (this.open) {
           try { await this.load(this.open, context); }
           catch { if (key() === context) this.setLines(["Cannot preview this diff (too large or unreadable)"]); }
@@ -330,9 +328,8 @@ export default class Changes extends View {
       const style = !remote && name === g.branchName ? "mine" : name === baseLocal ? "base" : "other";
       out.push(chip(`${style === "mine" ? "◎ " : ""}${remote && style !== "base" ? ref : name}${cloud}`, style));
     }
-    if (row.fork) out.push(div().flex_none().ml(6).px(5).py(1).rounded(4).border_1().border_dashed().border_color(t.accent).text_size(10.5).text_color(t.accent)
-      .child(`↳ ${g.branchName ?? "HEAD"} nació aquí`));
-    return out.slice(0, 4);
+    const born = row.fork ? [div().flex_none().ml(6).px(5).py(1).rounded(4).border_1().border_dashed().border_color(t.accent).text_size(10.5).text_color(t.accent).child("↳ nació aquí")] : [];
+    return [...born, ...out].slice(0, 4);
   }
 
   graphRow(row, t) {
@@ -367,11 +364,19 @@ export default class Changes extends View {
       button("graph-refresh", "⟳", (cx) => this.refreshGraph(cx, true))];
   }
 
+  closeDiff(cx) {
+    this.open = null; this.graphPick = null; this.closed = true; this.note = null; this.setLines([]);
+    cx.notify();
+  }
+
+  // Shown only while a file is picked: half the panel, with a ✕ that gives the space back.
   diffArea(t) {
-    const g = this.graphPick, area = this.diffBody(t);
-    return g ? v_flex().flex_1().min_h(0).size_full()
-      .child(div().flex_none().px(12).py(5).border_b(1).border_color(t.border).text_size(11).text_color(t.dim).truncate().child(`${g.sha.slice(0, 7)} · ${g.path}`))
-      .child(area) : area;
+    const g = this.graphPick, label = g ? `${g.sha.slice(0, 7)} · ${g.path}` : this.open;
+    return v_flex().flex_1().min_h(0).border_t(1).border_color(t.border)
+      .child(h_flex().flex_none().h(28).pl(12).pr(6).gap(8).items_center().border_b(1).border_color(t.border).text_size(11).text_color(t.dim)
+        .child(div().flex_1().min_w(0).truncate().child(label))
+        .child(div().id("close-diff").flex_none().px(6).py(2).rounded(5).cursor_pointer().hover((s) => s.bg(t.raised).text_color(t.foreground)).on_click((_e, cx) => this.closeDiff(cx)).child("✕")))
+      .child(this.diffBody(t));
   }
 
   diffBody(t) {
@@ -379,8 +384,7 @@ export default class Changes extends View {
       .child(div().id("changes-diff-x").size_full().overflow_x_scrollbar()
         .child(div().w_full().min_w(this.diffWidth).h_full().child(v_virtual_list("changes-diff", this.rows.length, 20, (i) => String(i),
           (range) => this.rows.slice(range.start, range.end).map((row) => this.diffRow(row, t))).size_full())))
-      .child(Scrollbar.vertical("changes-diff").viewport_from_layout().absolute().inset_0())
-      .when(!this.open && !this.graphPick && this.files.length > 0, (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child("Select a file to view its changes")));
+      .child(Scrollbar.vertical("changes-diff").viewport_from_layout().absolute().inset_0());
   }
 
   render(cx) {
@@ -394,19 +398,12 @@ export default class Changes extends View {
     const graphHeader = this.section("graph", "Graph", t, this.graphTools(t));
     const limited = (el) => el.when(this.limited, (e) => e.child(div().px(12).py(4).text_size(11).text_color(t.dim).child("Showing the first 1,000 changed files")));
 
-    // With the Graph open, a divider you drag splits the sections from the diff; otherwise the
-    // sections take what they need and the diff the rest, as before.
-    const body = graphOpen
-      ? v_resizable("cockpit-changes-split").flex_1().min_h(0).w_full()
-          .on_resize((sizes) => setShared(SPLIT, sizes[0]))
-          .child(resizable_panel().size(shared(SPLIT) ?? 320).size_range(SECTION * 2, 4000)
-            .child(v_flex().size_full().min_h(0)
-              .child(changesHeader).when(changesOpen, (e) => limited(e.child(this.changesList(t, 220))))
-              .child(graphHeader).child(this.graphBody(t))))
-          .child(resizable_panel().size_range(60, 4000).child(this.diffArea(t)))
-      : v_flex().flex_1().min_h(0)
-          .child(changesHeader).when(changesOpen, (e) => limited(e.child(this.changesList(t, 4000))))
-          .child(graphHeader).child(this.diffArea(t));
+    // Changes and Graph take the height; a picked file's diff takes half of it until closed.
+    const picked = Boolean(this.open || this.graphPick);
+    const body = v_flex().flex_1().min_h(0)
+      .child(changesHeader).when(changesOpen, (e) => limited(e.child(this.changesList(t, graphOpen || picked ? 220 : 4000))))
+      .child(graphHeader).when(graphOpen, (e) => e.child(this.graphBody(t)))
+      .when(picked, (e) => e.child(this.diffArea(t)));
 
     return v_flex().id("changes").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => {

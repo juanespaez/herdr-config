@@ -87,7 +87,7 @@ segundos padres), igual que en la imagen de VS Code.
 
 **Detección de la rama base**, en este orden:
 1. `git symbolic-ref --short refs/remotes/origin/HEAD` → `origin/<base>`;
-2. si no existe, `main`; luego `master`;
+2. si no existe, `origin/main`, `origin/master`, `main` y `master`;
 3. si ninguna existe, no hay base: se muestran solo HEAD y su upstream.
 
 Si la rama actual *es* la base, no hay «nació aquí».
@@ -133,12 +133,10 @@ temporizador de 10 s. El grafo solo se recalcula si cambió el resultado de
 cabecera tiene botones de refrescar y de ir a HEAD (desplaza la lista hasta HEAD).
 
 **Plegado y reparto del alto:** el estado abierto o cerrado de cada sección se guarda con
-`setShared`, con una clave del mod.
-- Changes crece hasta su contenido, con un tope.
-- Entre el bloque de secciones (Changes y Graph) y el visor de diff hay un **divisor arrastrable**
-  (decisión del usuario). Su posición se guarda con `setShared`, como fracción del alto del panel.
-- Si Graph está plegado, Changes y el diff se reparten el alto como hoy.
-- Si las dos secciones están plegadas, el diff se queda con todo el espacio.
+`setShared`, con una clave del mod. Changes y Graph ocupan todo el alto. El diff aparece **solo al
+elegir un archivo** (de Changes o de un commit del Graph): toma la mitad de abajo, con una cabecera
+que dice qué muestra y una ✕ que lo cierra y devuelve el espacio. Ya no se abre solo el primer
+archivo. (Revisión del usuario, 2026-11-22: el divisor arrastrable no aportaba.)
 
 **Clic en commit:**
 - Archivos: `git show --numstat -z --format= <sha>`. En los merges, `git show` no lista nada por
