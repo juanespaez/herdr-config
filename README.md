@@ -5,6 +5,11 @@ mods, and a letter-only keymap (no arrow keys needed).
 
 ![The cockpit layout: agents panel on the left, Claude Code tabs and terminal on the right](docs/cockpit.png)
 
+The Changes panel is a Source Control view (`cockpit-changes`): your changes, and a graph of the
+branch you're on, its upstream and the base it came from.
+
+![The Source Control panel: Changes, the branch graph with an expanded merge commit, and its diff](docs/source-control.png)
+
 ## What's inside
 
 This repo mirrors `~/.config/herdr-app`, so installing is just copying it into place.
@@ -17,6 +22,7 @@ This repo mirrors `~/.config/herdr-app`, so installing is just copying it into p
 | `mods/cockpit-top` · `cockpit-tabs` · `cockpit-status` | Chrome for the cockpit layout. |
 | `mods/cockpit-agents` | Agents panel with creature glyphs and a "who am I" account badge. |
 | `mods/cockpit-subagents` | Column listing Claude Code subagents of the focused agent. |
+| `mods/cockpit-changes` | Source Control panel: collapsible Changes and Graph (current branch, upstream, detected base, fork point), commit drill-down into files and diffs. |
 | `mods/cockpit-keys` | Keys cheat sheet (static text; update it if you change `keys.json`). |
 | `mods/keyhelper` | Invisible mod that runs multi-step keys (terminal-only mode, panel toggles, split left/up). |
 | `keys.json` | Keymap. |
@@ -85,9 +91,14 @@ Claude Code need `ctrl-c/t/f/n`). Everything is `ctrl-shift` / `ctrl-alt` + lett
 
 Herdr with mod support (gpui-based app), macOS. `cockpit-subagents` needs `python3`.
 
+## Tests
+
+`node --test tests/` runs the tests for `cockpit-changes` (graph lanes and git queries, against
+throwaway repos). They aren't installed.
+
 ## License
 
-[MIT](LICENSE), covering my own files: the `cockpit-*` mods, `keyhelper`, the `cockpit` and
+[MIT](LICENSE), covering my own files: the `cockpit-*` mods (including `cockpit-changes`), `keyhelper`, the `cockpit` and
 `my-main` layouts, the `cockpit` theme, `keys.json` and `settings.json`. The shipped Herdr
 files included for completeness (other mods, layouts, `frame/`, `icons/`) belong to their
 respective authors and keep their own terms; see `icons/LICENSE-*.txt` and `icons/LICENSES.md`.
